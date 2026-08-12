@@ -7,7 +7,7 @@ from src.models.decoder import DeepDecoder
 from src.models.hmm import DifferentiableHMM
 from src.models.dghmm import DGHMM
 from src.utils.flows import NormalizingFlow
-from src.utils.data_loader import preprocess_tabular_to_sequences, get_dataloader
+from src.utils.data_loader import preprocess_mimic_demo, get_dataloader
 from src.evaluation.fidelity import compute_ks_score, compute_correlation_preservation
 from src.evaluation.temporal import compute_autocorrelation, compute_dtw_distance
 from src.evaluation.privacy import evaluate_mia_resistance, compute_k_anonymity
@@ -32,7 +32,7 @@ class TestDGHMM(unittest.TestCase):
         self.assertEqual(mu.shape, (self.batch_size, self.seq_len, self.latent_dim))
         self.assertEqual(logvar.shape, (self.batch_size, self.seq_len, self.latent_dim))
 
-    def test_decoder(self):
+    def test_decoder(self): 
         decoder = DeepDecoder(latent_dim=self.latent_dim, num_states=self.num_states, output_dim=self.input_dim)
         z = torch.randn(self.batch_size, self.seq_len, self.latent_dim)
         state_onehot = torch.zeros(self.batch_size, self.seq_len, self.num_states)
@@ -103,23 +103,31 @@ class TestDGHMM(unittest.TestCase):
         self.assertTrue(torch.allclose(z, reconstructed, atol=1e-4))
 
     def test_data_loader(self):
-        data = {
-            'patient_id': [1, 1, 1, 2, 2],
-            'time_step': [1, 2, 3, 1, 2],
-            'feature1': [0.1, 0.2, 0.3, 0.5, 0.6],
-            'feature2': [1.0, 2.0, 1.5, 3.0, 4.0]
-        }
-        df = pd.DataFrame(data)
-        sequences = preprocess_tabular_to_sequences(
-            df, id_col='patient_id', time_col='time_step',
-            feature_cols=['feature1', 'feature2'], seq_len=3
-        )
-        # Expected shape: (2 patients, 3 steps, 2 features)
-        self.assertEqual(sequences.shape, (2, 3, 2))
-        
-        loader = get_dataloader(sequences, batch_size=2, shuffle=False)
-        for batch in loader:
-            self.assertEqual(batch.shape, (2, 3, 2))
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a mock CHARTEVENTS.csv
+            data = {
+                'icustay_id': [10006, 10006, 10006, 10011, 10011],
+                'itemid': [220045, 220179, 220180, 220210, 220277],
+                'charttime': [
+                    '2164-10-23 21:00:00', '2164-10-23 22:00:00', '2164-10-23 23:00:00',
+                    '2126-08-28 15:00:00', '2126-08-28 16:00:00'
+                ],
+                'valuenum': [85.0, 120.0, 80.0, 18.0, 98.0]
+            }
+            df = pd.DataFrame(data)
+            df.to_csv(os.path.join(tmpdir, "CHARTEVENTS.csv"), index=False)
+            
+            sequences, feature_names = preprocess_mimic_demo(tmpdir, seq_len=4)
+            
+            # Expected shape: (2 stays, 4 steps, 6 features)
+            self.assertEqual(sequences.shape, (2, 4, 6))
+            self.assertEqual(len(feature_names), 6)
+            
+            loader = get_dataloader(sequences, batch_size=2, shuffle=False)
+            for batch in loader:
+                self.assertEqual(batch.shape, (2, 4, 6))
 
     def test_evaluation_metrics(self):
         real = np.random.randn(10, 5, 2)
